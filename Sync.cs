@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,9 +25,6 @@ public static class Sync
     // If to pull entra users
     private static bool _pullEntraUsers =
         bool.Parse(Environment.GetEnvironmentVariable("SyncEntra", EnvironmentVariableTarget.Process) ?? "false");
-    
-    // If to pull entra users
-    private static string _pullEntraProperties = (Environment.GetEnvironmentVariable("SyncEntraProperties", EnvironmentVariableTarget.Process) ?? "id,mail,displayName,givenName,surname,department,companyName,city,country,JobTitle");
     
     /// <summary>
     /// How many table rows to send up in a batch
@@ -91,6 +89,11 @@ public static class Sync
         // Sync Tenant Simulation Users
         foreach (string id in simulationIds)
         {
+            // Throw if taskBatchQueueProcessor is faulted
+            if (taskBatchQueueProcessor.IsFaulted)
+                throw new Exception($"taskBatchQueueProcessor has faulted: {taskBatchQueueProcessor.Exception}");
+            
+            // Run get simulation users
             await GetTenantSimulationUsers(GraphClient, id);
         }
 
@@ -234,13 +237,23 @@ public static class Sync
             {
                 // Get the table row item for this simulation
                 var SimulationExistingTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Simulations", sim.Id);
+
+                // For determining the last user sync
+                DateTime? LastUserSync = null;
+                if (SimulationExistingTableItem.HasValue && SimulationExistingTableItem.Value.ContainsKey("LastUserSync"))
+                    LastUserSync = DateTime.SpecifyKind(DateTime.Parse(SimulationExistingTableItem.Value["LastUserSync"].ToString()), DateTimeKind.Utc);
                 
                 // Perform a user sync (if)
                 // - We have never performed a sync
                 // - The simulation finished within the past 7 days
                 // - Or the simulation is running
+                // - Last user sync is more than a month ago
                 
-                if (!SimulationExistingTableItem.HasValue || sim.Status == SimulationStatus.Running || sim.CompletionDateTime > DateTime.UtcNow.AddDays(-7))
+                if (!SimulationExistingTableItem.HasValue || 
+                    sim.Status == SimulationStatus.Running || 
+                    sim.CompletionDateTime > DateTime.UtcNow.AddDays(-7) || 
+                    LastUserSync is null || 
+                    (LastUserSync.HasValue && LastUserSync.Value < DateTime.UtcNow.AddMonths(-1)))
                 {
                     _log.LogInformation($"Perform full synchronisation of simulation '{sim.DisplayName}' status {SimulationStatus.Running}");
                     SimulationIds.Add(sim.Id);
@@ -269,7 +282,8 @@ public static class Sync
                     {"Payload_DisplayName", sim.Payload?.DisplayName},
                     {"Payload_Platform", sim.Payload?.Platform?.ToString()},
                     {"Status", sim.Status.ToString()},
-                    {"AutomationId", sim.AutomationId}
+                    {"AutomationId", sim.AutomationId},
+                    {"LastUserSync", LastUserSync}
                 }));
                 
                 return true; 
@@ -286,6 +300,8 @@ public static class Sync
     /// <param name="GraphClient"></param>
     private static async Task GetTenantSimulationUsers(GraphServiceClient GraphClient, string SimulationId)
     {
+        Stopwatch sw = Stopwatch.StartNew();
+        _log.LogInformation($"Performing full user synchronisation of {SimulationId}");
 
         var requestInformation =
             GraphClient.Security.AttackSimulation.Simulations[SimulationId].ToGetRequestInformation();
@@ -306,6 +322,10 @@ public static class Sync
                     {"SimulationUser_Email", userSimDetail.SimulationUser?.Email},
                     {"CompromisedDateTime", userSimDetail.CompromisedDateTime},
                     {"ReportedPhishDateTime", userSimDetail.ReportedPhishDateTime},
+                    {"AssignedTrainingsCount", userSimDetail.AssignedTrainingsCount},
+                    {"CompletedTrainingsCount", userSimDetail.CompletedTrainingsCount},
+                    {"InProgressTrainingsCount", userSimDetail.InProgressTrainingsCount},
+                    {"IsCompromised", userSimDetail.IsCompromised},
                 }));
                 
                 // Determine if should sync user
@@ -345,6 +365,11 @@ public static class Sync
             {"LastUserSync", DateTime.UtcNow},
         }));
         
+        _log.LogInformation($"Full user synchronisation of {SimulationId} completed in {sw.Elapsed}");
+        
+        // Perform a task delay here to allow other threads to complete
+        await Task.Delay(1000);
+
     }
 
     /// <summary>
@@ -382,8 +407,6 @@ public static class Sync
     {
         // Set in dictionary
         userListSynced[id] = true;
-
-        string[] syncProperties = _pullEntraProperties.Split(",");
         
         try
         {
@@ -449,11 +472,14 @@ public static class Sync
         // Get last sync time
         DateTime? LastUserSync = null;
         if (UserTableItem.HasValue && UserTableItem.Value.ContainsKey("LastUserSync"))
-            LastUserSync = DateTime.Parse(UserTableItem.Value["LastUserSync"].ToString());
+            LastUserSync = DateTime.SpecifyKind(DateTime.Parse(UserTableItem.Value["LastUserSync"].ToString()), DateTimeKind.Utc);
 
-        // If no sync or days is older than a year
-        if (LastUserSync is null || LastUserSync.Value < DateTime.UtcNow.AddDays(-1))
+        // If no sync or days is older than a week
+        if (LastUserSync is null || LastUserSync.Value < DateTime.UtcNow.AddDays(-7))
             return true;
+           
+        // Add to userSyncList so we don't need to check again
+        userListSynced[id] = true;
 
         return false;
 
