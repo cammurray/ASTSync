@@ -46,7 +46,7 @@ public static class Sync
     private static ILogger _log { get; set; }
     
     [FunctionName("Sync")]
-    public static async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
+    public static async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo myTimer, ILogger log)
     {
 
         _log = log;
@@ -208,7 +208,7 @@ public static class Sync
             .CreatePageIterator(GraphClient, results, async (sim) =>
             {
                 // Get the table row item for this simulation
-                var SimulationExistingTableItem = await tableClient.GetEntityAsync<TableEntity>("Simulations", sim.Id);
+                var SimulationExistingTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Simulations", sim.Id);
                 
                 // Get last sync time
                 DateTime? LastUserSync = null;
@@ -266,11 +266,12 @@ public static class Sync
     /// <param name="GraphClient"></param>
     private static async Task GetTenantSimulationUsers(GraphServiceClient GraphClient, string SimulationId)
     {
-        
+
         var requestInformation =
             GraphClient.Security.AttackSimulation.Simulations[SimulationId].ToGetRequestInformation();
 
         requestInformation.URI = new Uri(requestInformation.URI.ToString() + "/report/simulationUsers");
+        requestInformation.QueryParameters["Top"] = 1000;
 
         var results = await GraphClient.RequestAdapter.SendAsync<UserSimulationDetailsCollectionResponse>(requestInformation, UserSimulationDetailsCollectionResponse.CreateFromDiscriminatorValue);
 
