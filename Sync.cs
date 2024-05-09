@@ -40,9 +40,16 @@ public static class Sync
     /// </summary>
     private static ConcurrentQueue<TableTransactionAction> tableActionQueue_SimulationUserEvents  = new();
     
+    /// <summary>
+    /// Logger
+    /// </summary>
+    private static ILogger _log { get; set; }
+    
     [FunctionName("Sync")]
     public static async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
     {
+
+        _log = log;
         
         // Validate required variables
         if (string.IsNullOrEmpty(_appClientId) || string.IsNullOrEmpty(_appTenantId) || string.IsNullOrEmpty(_appSecret))
@@ -50,8 +57,7 @@ public static class Sync
 
         var GraphClient = GetGraphServicesClient();
         
-        log.LogInformation($"C# Timer trigger function executed at: {DateTime.UtcNow}");
-        Console.WriteLine(GetStorageConnection());
+        _log.LogInformation($"C# Timer trigger function executed at: {DateTime.UtcNow}");
 
         await CreateRequiredTables();
         
@@ -59,7 +65,9 @@ public static class Sync
         CancellationTokenSource batchQueueProcessorTokenSource = new CancellationTokenSource();
         Task taskBatchQueueProcessor = Task.Run(() => BatchQueueProcessor(batchQueueProcessorTokenSource.Token));
         
-        // Sync Tenant Simulations
+        // Sync Tenant Simulations to perform sync whilst sync'ing simulations to table
+        // This can probably be moved to an async foreach below.
+        
         var simulationIds = await GetTenantSimulations(GraphClient);
 
         // Sync Tenant Simulation Users
@@ -145,7 +153,8 @@ public static class Sync
         if (BatchTransactions.Any())
         {
             // Submit the transactions
-            Console.WriteLine($"Uploading batch {BatchTransactions.Count} to {tableClient.Name}");
+            _log.LogInformation($"Uploading batch to {tableClient.Name} of size {BatchTransactions.Count}");
+            
             try
             {
                 await tableClient.SubmitTransactionAsync(BatchTransactions);
@@ -153,7 +162,7 @@ public static class Sync
             catch (TableTransactionFailedException e)
             {
                 TableTransactionAction failingAction = BatchTransactions.ToList()[e.FailedTransactionActionIndex.Value];
-                Console.WriteLine(e.FailedTransactionActionIndex);
+                _log.LogError($"Failed to insert batch transaction in {tableClient.Name} with partition key {failingAction.Entity.PartitionKey} row key {failingAction.Entity.RowKey}");
             }
         }
     }
@@ -206,9 +215,16 @@ public static class Sync
                 if (SimulationExistingTableItem.HasValue && SimulationExistingTableItem.Value.ContainsKey("LastUserSync"))
                     LastUserSync = DateTime.Parse(SimulationExistingTableItem.Value["LastUserSync"].ToString());
                 
-                // Add id to hashset. Get the existing Simulation Id
-                if(LastUserSync is null || LastUserSync < DateTime.UtcNow.AddHours(-1))
+                // Perform a user sync (if)
+                // - We have never performed a sync
+                // - We have performed a sync over 7 days ago
+                // - The simulation finished within the past 7 days
+                // - Or the simulation is running
+                if (LastUserSync is null || LastUserSync < DateTime.UtcNow.AddDays(-7) || sim.Status == SimulationStatus.Running || sim.CompletionDateTime > DateTime.UtcNow.AddDays(-7))
+                {
+                    _log.LogInformation($"Perform full synchronisation of simulation '{sim.DisplayName}' status {SimulationStatus.Running}");
                     SimulationIds.Add(sim.Id);
+                }
                 
                 // Add the table item
                 tableActionQueue_Simulations.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Simulations", sim.Id)
