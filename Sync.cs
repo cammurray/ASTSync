@@ -41,7 +41,7 @@ public static class Sync
     private static ConcurrentQueue<TableTransactionAction> tableActionQueue_SimulationUserEvents  = new();
     
     [FunctionName("Sync")]
-    public static async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo myTimer, ILogger log)
+    public static async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
     {
         
         // Validate required variables
