@@ -18,7 +18,14 @@ public static class Sync
 
     private static string _appClientId = Environment.GetEnvironmentVariable("AppClientId", EnvironmentVariableTarget.Process);
     private static string _appTenantId = Environment.GetEnvironmentVariable("AppTenantId", EnvironmentVariableTarget.Process);
-    private static string _appSecret =Environment.GetEnvironmentVariable("AppSecret", EnvironmentVariableTarget.Process);
+    private static string _appSecret = Environment.GetEnvironmentVariable("AppSecret", EnvironmentVariableTarget.Process);
+
+    // If to pull entra users
+    private static bool _pullEntraUsers =
+        bool.Parse(Environment.GetEnvironmentVariable("SyncEntra", EnvironmentVariableTarget.Process) ?? "false");
+    
+    // If to pull entra users
+    private static string _pullEntraProperties = (Environment.GetEnvironmentVariable("SyncEntraProperties", EnvironmentVariableTarget.Process) ?? "id,mail,displayName,givenName,surname,department,companyName,city,country,JobTitle");
     
     /// <summary>
     /// How many table rows to send up in a batch
@@ -39,6 +46,16 @@ public static class Sync
     /// Queue for Simulation User Events Table entries, async batch/bulk processed
     /// </summary>
     private static ConcurrentQueue<TableTransactionAction> tableActionQueue_SimulationUserEvents  = new();
+    
+    /// <summary>
+    /// Queue for User entries, async batch/bulk processed
+    /// </summary>
+    private static ConcurrentQueue<TableTransactionAction> tableActionQueue_Users  = new();
+
+    /// <summary>
+    /// Maintains a list of users we have already synced
+    /// </summary>
+    private static ConcurrentDictionary<string, bool> userListSynced = new();
     
     /// <summary>
     /// Logger
@@ -106,12 +123,16 @@ public static class Sync
             if (tableActionQueue_SimulationUsers.Count > _maxTableBatchSize)
                 SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_SimulationUsers,
                     new TableClient(GetStorageConnection(), "SimulationUsers"), cancellationToken))); 
-        
-
+            
             // Process SimulationUserEvents Queue
             if (tableActionQueue_SimulationUserEvents.Count > _maxTableBatchSize)
                 SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_SimulationUserEvents,
                     new TableClient(GetStorageConnection(), "SimulationUserEvents"), cancellationToken))); 
+            
+            // Process Users Queue
+            if (tableActionQueue_Users.Count > _maxTableBatchSize)
+                SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_Users,
+                    new TableClient(GetStorageConnection(), "Users"), cancellationToken))); 
 
             // Wait for all submission tasks to complete
             await Task.WhenAll(SubmissionTasks);
@@ -122,7 +143,7 @@ public static class Sync
         
         // Flush all queues if not empty
         while (!tableActionQueue_SimulationUsers.IsEmpty && !tableActionQueue_SimulationUserEvents.IsEmpty &&
-               !tableActionQueue_SimulationUserEvents.IsEmpty)
+               !tableActionQueue_SimulationUserEvents.IsEmpty && !tableActionQueue_Users.IsEmpty)
         {
             await BatchQueueProcess(tableActionQueue_Simulations,
                 new TableClient(GetStorageConnection(), "Simulations"), cancellationToken);
@@ -130,6 +151,8 @@ public static class Sync
                 new TableClient(GetStorageConnection(), "SimulationUsers"), cancellationToken);
             await BatchQueueProcess(tableActionQueue_SimulationUserEvents,
                 new TableClient(GetStorageConnection(), "SimulationUserEvents"), cancellationToken);
+            await BatchQueueProcess(tableActionQueue_Users,
+                new TableClient(GetStorageConnection(), "Users"), cancellationToken);
         }
 
     }
@@ -179,6 +202,7 @@ public static class Sync
         await serviceClient.CreateTableIfNotExistsAsync("Simulations");
         await serviceClient.CreateTableIfNotExistsAsync("SimulationUsers");
         await serviceClient.CreateTableIfNotExistsAsync("SimulationUserEvents");
+        await serviceClient.CreateTableIfNotExistsAsync("Users");
     }
     
     /// <summary>
@@ -288,6 +312,12 @@ public static class Sync
                     {"ReportedPhishDateTime", userSimDetail.ReportedPhishDateTime},
                 }));
                 
+                // Determine if should sync user
+                if (await ShouldSyncUser(userSimDetail.SimulationUser?.UserId))
+                {
+                    await SyncUser(GraphClient, userSimDetail.SimulationUser?.UserId);
+                }
+                
                 // Add simulation user events in to table
                 if (userSimDetail.SimulationEvents is not null)
                 {
@@ -346,4 +376,78 @@ public static class Sync
     /// </summary>
     /// <returns></returns>
     public static string GetStorageConnection() => Environment.GetEnvironmentVariable("AzureWebJobsStorage", EnvironmentVariableTarget.Process);
+
+    /// <summary>
+    /// Synchronise user
+    /// </summary>
+    /// <param name="id"></param>
+    /// <returns></returns>
+    private static async Task SyncUser(GraphServiceClient GraphClient, string id)
+    {
+        // Set in dictionary
+        userListSynced[id] = true;
+
+        string[] syncProperties = _pullEntraProperties.Split(",");
+        
+        try
+        {
+            var User = await GraphClient.Users[id].GetAsync(requestConfiguration =>
+                requestConfiguration.QueryParameters.Select = syncProperties);
+
+            if (User is not null)
+            {
+                tableActionQueue_Users.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Users", id)
+                {
+                    {"DisplayName", User.DisplayName},
+                    {"GivenName", User.GivenName},
+                    {"Surname", User.Surname},
+                    {"Country", User.Country},
+                    {"Mail", User.Mail},
+                    {"Department", User.Department},
+                    {"CompanyName", User.CompanyName},
+                    {"City", User.City},
+                    {"Country", User.Country},
+                    {"JobTitle", User.JobTitle},
+                    {"LastUserSync", DateTime.UtcNow}
+                }));
+            }
+
+        }
+        catch (Exception e)
+        {
+            _log.LogError($"Failed to sync user {id}: {e}");
+        }
+    }
+    
+    /// <summary>
+    /// Determine if should sync user
+    /// </summary>
+    /// <param name="id"></param>
+    /// <returns></returns>
+    private static async Task<bool> ShouldSyncUser(string id)
+    {
+        // Return false if set not to sync users
+        if (!_pullEntraUsers)
+            return false;
+        
+        // Return false if already synchronised
+        if (userListSynced.ContainsKey(id))
+            return false;
+        
+        // Get the table entity to determine how long ago the user has been pulled
+        TableClient tableClient = new TableClient(GetStorageConnection(), "Users");
+        var UserTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Users", id);
+                
+        // Get last sync time
+        DateTime? LastUserSync = null;
+        if (UserTableItem.HasValue && UserTableItem.Value.ContainsKey("LastUserSync"))
+            LastUserSync = DateTime.Parse(UserTableItem.Value["LastUserSync"].ToString());
+
+        // If no sync or days is older than a year
+        if (LastUserSync is null || LastUserSync.Value < DateTime.UtcNow.AddDays(-1))
+            return true;
+
+        return false;
+
+    }
 }
