@@ -281,6 +281,7 @@ public static class Sync
                 // Add the table item
                 tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, userSimDetail.SimulationUser?.UserId)
                 {
+                    {"SimulationUser_Id", $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}"},
                     {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
                     {"SimulationUser_Email", userSimDetail.SimulationUser?.Email},
                     {"CompromisedDateTime", userSimDetail.CompromisedDateTime},
@@ -294,6 +295,7 @@ public static class Sync
                     {
                         tableActionQueue_SimulationUserEvents.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
                         {
+                            {"SimulationUser_Id", $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}"},
                             {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
                             {"SimulationUserEvent_EventName", simulationUserEvents.EventName},
                             {"SimulationUserEvent_EventDateTime", simulationUserEvents.EventDateTime},
