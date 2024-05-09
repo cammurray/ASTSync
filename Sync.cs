@@ -10,6 +10,7 @@ using Microsoft.Azure.WebJobs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Beta;
 using Microsoft.Graph.Beta.Models;
+using Microsoft.Graph.Beta.Models.ODataErrors;
 
 namespace ASTSync;
 
@@ -234,17 +235,12 @@ public static class Sync
                 // Get the table row item for this simulation
                 var SimulationExistingTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Simulations", sim.Id);
                 
-                // Get last sync time
-                DateTime? LastUserSync = null;
-                if (SimulationExistingTableItem.HasValue && SimulationExistingTableItem.Value.ContainsKey("LastUserSync"))
-                    LastUserSync = DateTime.Parse(SimulationExistingTableItem.Value["LastUserSync"].ToString());
-                
                 // Perform a user sync (if)
                 // - We have never performed a sync
-                // - We have performed a sync over 7 days ago
                 // - The simulation finished within the past 7 days
                 // - Or the simulation is running
-                if (LastUserSync is null || LastUserSync < DateTime.UtcNow.AddDays(-7) || sim.Status == SimulationStatus.Running || sim.CompletionDateTime > DateTime.UtcNow.AddDays(-7))
+                
+                if (!SimulationExistingTableItem.HasValue || sim.Status == SimulationStatus.Running || sim.CompletionDateTime > DateTime.UtcNow.AddDays(-7))
                 {
                     _log.LogInformation($"Perform full synchronisation of simulation '{sim.DisplayName}' status {SimulationStatus.Running}");
                     SimulationIds.Add(sim.Id);
@@ -273,7 +269,7 @@ public static class Sync
                     {"Payload_DisplayName", sim.Payload?.DisplayName},
                     {"Payload_Platform", sim.Payload?.Platform?.ToString()},
                     {"Status", sim.Status.ToString()},
-                    {"AutomationId", sim.AutomationId},
+                    {"AutomationId", sim.AutomationId}
                 }));
                 
                 return true; 
@@ -344,7 +340,7 @@ public static class Sync
         await pageIterator.IterateAsync();
         
         // update in the Simulations table that this has been syncd
-        tableActionQueue_Simulations.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateMerge, new TableEntity("Simulations", SimulationId)
+        tableActionQueue_Simulations.Enqueue(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Simulations", SimulationId)
         {
             {"LastUserSync", DateTime.UtcNow},
         }));
@@ -391,8 +387,7 @@ public static class Sync
         
         try
         {
-            var User = await GraphClient.Users[id].GetAsync(requestConfiguration =>
-                requestConfiguration.QueryParameters.Select = syncProperties);
+            var User = await GraphClient.Users[id].GetAsync();
 
             if (User is not null)
             {
@@ -408,14 +403,27 @@ public static class Sync
                     {"City", User.City},
                     {"Country", User.Country},
                     {"JobTitle", User.JobTitle},
-                    {"LastUserSync", DateTime.UtcNow}
+                    {"LastUserSync", DateTime.UtcNow},
+                    {"Exists", "true"},
                 }));
             }
 
         }
-        catch (Exception e)
+        catch (ODataError e)
         {
-            _log.LogError($"Failed to sync user {id}: {e}");
+            if (e.Error.Code == "Request_ResourceNotFound")
+            {
+                // User no longer exists
+                tableActionQueue_Users.Enqueue(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Users", id)
+                {
+                    {"Exists", "false"},
+                }));
+            }
+            else
+            {
+                _log.LogError($"Failed to sync user {id}: {e}");
+            }
+            
         }
     }
     
