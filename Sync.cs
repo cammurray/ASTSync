@@ -321,10 +321,13 @@ public static class Sync
         var pageIterator = Microsoft.Graph.PageIterator<UserSimulationDetails,UserSimulationDetailsCollectionResponse>
             .CreatePageIterator(GraphClient, results, async (userSimDetail) =>
             {
+                // Create an identifier for the SimulationUser_Id
+                string id = $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}";
+                
                 // Add the table item
-                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, userSimDetail.SimulationUser?.UserId)
+                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("SimulationUsers", id)
                 {
-                    {"SimulationUser_Id", $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}"},
+                    {"SimulationUser_Id", id},
                     {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
                     {"SimulationUser_Email", userSimDetail.SimulationUser?.Email},
                     {"CompromisedDateTime", userSimDetail.CompromisedDateTime},
@@ -347,7 +350,7 @@ public static class Sync
                 {
                     foreach (var simulationUserEvents in userSimDetail.SimulationEvents)
                     {
-                        tableActionQueue_SimulationUserEvents.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
+                        tableActionQueue_SimulationUserEvents.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("SimulationUserEvents", $"{id}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
                         {
                             {"SimulationUser_Id", $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}"},
                             {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
