@@ -190,7 +190,7 @@ public static class Sync
             {
                 List<TableTransactionAction> failedBatch = BatchTransactions.ToList();
                 
-                _log.LogError($"Failed to insert batch transaction in {tableClient.Name} with partition key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.PartitionKey} row key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.RowKey}");
+                _log.LogError($"Failed to insert batch transaction in {tableClient.Name} with partition key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.PartitionKey} row key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.RowKey} {e.Message}");
                 
                 // Remove the failing item from the batch and requeue rest
                 failedBatch.RemoveAt(e.FailedTransactionActionIndex.Value);
