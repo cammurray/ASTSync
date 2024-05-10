@@ -119,30 +119,30 @@ public static class Sync
             List<Task> SubmissionTasks = new List<Task>();
         
             // Process Simulations Queue
-            if (tableActionQueue_Simulations.Count > _maxTableBatchSize)
+            if (tableActionQueue_Simulations.Any())
                 SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_Simulations,
                     new TableClient(GetStorageConnection(), "Simulations"), cancellationToken))); 
         
             // Process SimulationUsers Queue
-            if (tableActionQueue_SimulationUsers.Count > _maxTableBatchSize)
+            if (tableActionQueue_SimulationUsers.Any())
                 SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_SimulationUsers,
                     new TableClient(GetStorageConnection(), "SimulationUsers"), cancellationToken))); 
             
             // Process SimulationUserEvents Queue
-            if (tableActionQueue_SimulationUserEvents.Count > _maxTableBatchSize)
+            if (tableActionQueue_SimulationUserEvents.Any())
                 SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_SimulationUserEvents,
                     new TableClient(GetStorageConnection(), "SimulationUserEvents"), cancellationToken))); 
             
             // Process Users Queue
-            if (tableActionQueue_Users.Count > _maxTableBatchSize)
+            if (tableActionQueue_Users.Any())
                 SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_Users,
                     new TableClient(GetStorageConnection(), "Users"), cancellationToken))); 
 
             // Wait for all submission tasks to complete
             await Task.WhenAll(SubmissionTasks);
 
-            // Sleep for a second
-            await Task.Delay(1000);
+            // Sleep for ten seconds
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
         }
         
         // Flush all queues if not empty
@@ -239,7 +239,7 @@ public static class Sync
                 var SimulationExistingTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Simulations", sim.Id);
 
                 // For determining the last user sync
-                DateTime? LastUserSync = null;
+                DateTime LastUserSync = DateTime.SpecifyKind(new DateTime(), DateTimeKind.Utc);
                 if (SimulationExistingTableItem.HasValue && SimulationExistingTableItem.Value.ContainsKey("LastUserSync"))
                     LastUserSync = DateTime.SpecifyKind(DateTime.Parse(SimulationExistingTableItem.Value["LastUserSync"].ToString()), DateTimeKind.Utc);
                 
@@ -252,8 +252,7 @@ public static class Sync
                 if (!SimulationExistingTableItem.HasValue || 
                     sim.Status == SimulationStatus.Running || 
                     sim.CompletionDateTime > DateTime.UtcNow.AddDays(-7) || 
-                    LastUserSync is null || 
-                    (LastUserSync.HasValue && LastUserSync.Value < DateTime.UtcNow.AddMonths(-1)))
+                    (LastUserSync < DateTime.UtcNow.AddMonths(-1)))
                 {
                     _log.LogInformation($"Perform full synchronisation of simulation '{sim.DisplayName}' status {SimulationStatus.Running}");
                     SimulationIds.Add(sim.Id);
@@ -326,6 +325,7 @@ public static class Sync
                     {"CompletedTrainingsCount", userSimDetail.CompletedTrainingsCount},
                     {"InProgressTrainingsCount", userSimDetail.InProgressTrainingsCount},
                     {"IsCompromised", userSimDetail.IsCompromised},
+                    {"HasReported", userSimDetail.ReportedPhishDateTime is not null},
                 }));
                 
                 // Determine if should sync user
