@@ -188,8 +188,16 @@ public static class Sync
             }
             catch (TableTransactionFailedException e)
             {
-                TableTransactionAction failingAction = BatchTransactions.ToList()[e.FailedTransactionActionIndex.Value];
-                _log.LogError($"Failed to insert batch transaction in {tableClient.Name} with partition key {failingAction.Entity.PartitionKey} row key {failingAction.Entity.RowKey}");
+                List<TableTransactionAction> failedBatch = BatchTransactions.ToList();
+                
+                _log.LogError($"Failed to insert batch transaction in {tableClient.Name} with partition key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.PartitionKey} row key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.RowKey}");
+                
+                // Remove the failing item from the batch and requeue rest
+                failedBatch.RemoveAt(e.FailedTransactionActionIndex.Value);
+                foreach (TableTransactionAction action in failedBatch)
+                {
+                    Queue.Enqueue(action);
+                }
             }
         }
     }
