@@ -247,7 +247,7 @@ public static class Sync
                 var SimulationExistingTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Simulations", sim.Id);
 
                 // For determining the last user sync
-                DateTime LastUserSync = DateTime.SpecifyKind(new DateTime(), DateTimeKind.Utc);
+                DateTime LastUserSync = DateTime.SpecifyKind(new DateTime(1986,1,1), DateTimeKind.Utc);
                 if (SimulationExistingTableItem.HasValue && SimulationExistingTableItem.Value.ContainsKey("LastUserSync"))
                     LastUserSync = DateTime.SpecifyKind(DateTime.Parse(SimulationExistingTableItem.Value["LastUserSync"].ToString()), DateTimeKind.Utc);
                 
@@ -479,12 +479,12 @@ public static class Sync
         var UserTableItem = await tableClient.GetEntityIfExistsAsync<TableEntity>("Users", id);
                 
         // Get last sync time
-        DateTime? LastUserSync = null;
+        DateTime LastUserSync = new DateTime(1986,1,1);
         if (UserTableItem.HasValue && UserTableItem.Value.ContainsKey("LastUserSync"))
             LastUserSync = DateTime.SpecifyKind(DateTime.Parse(UserTableItem.Value["LastUserSync"].ToString()), DateTimeKind.Utc);
 
         // If no sync or days is older than a week
-        if (LastUserSync is null || LastUserSync.Value < DateTime.UtcNow.AddDays(-7))
+        if (LastUserSync < DateTime.UtcNow.AddDays(-7))
             return true;
            
         // Add to userSyncList so we don't need to check again
