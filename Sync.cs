@@ -440,6 +440,7 @@ public static class Sync
                 tableActionQueue_Users.Enqueue(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Users", id)
                 {
                     {"Exists", "false"},
+                    {"LastUserSync", DateTime.UtcNow},
                 }));
             }
             else
