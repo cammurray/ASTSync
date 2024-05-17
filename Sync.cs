@@ -167,6 +167,11 @@ public static class Sync
     private static async Task BatchQueueProcess(ConcurrentQueue<TableTransactionAction> Queue, TableClient tableClient, CancellationToken ct)
     {
         List<TableTransactionAction> BatchTransactions = new List<TableTransactionAction>();
+        
+        // Used to re-queue transactions that cannot be put in this batch
+        // Such as transactions with a row key that is already present in the batch (cannot perform within the same batch)
+        
+        List<TableTransactionAction> RequeueTransactions = new List<TableTransactionAction>();
 
         // Take items out of the queue until it's empty or the max batch size hit
         while (!Queue.IsEmpty && BatchTransactions.Count < _maxTableBatchSize)
@@ -174,7 +179,24 @@ public static class Sync
             TableTransactionAction dequeued;
 
             if (Queue.TryDequeue(out dequeued))
-                BatchTransactions.Add(dequeued);
+            {
+                // Validate row key is not already in batch transactions
+                // Batches cannot contain two transactions for the same partition key and row.
+                
+                if (BatchTransactions.Any(x =>
+                        x.Entity.PartitionKey == dequeued.Entity.PartitionKey &&
+                        x.Entity.RowKey == dequeued.Entity.RowKey))
+                {
+                    // Requeue the transaction for next batch as it is already existing in this batch
+                    RequeueTransactions.Add(dequeued);
+                }
+                else
+                {
+                    BatchTransactions.Add(dequeued);
+                }
+                
+            }
+                
         }
 
         if (BatchTransactions.Any())
@@ -199,6 +221,13 @@ public static class Sync
                     Queue.Enqueue(action);
                 }
             }
+        }
+        
+        // Requeue transactions
+        if (RequeueTransactions.Any())
+        {
+            foreach(var transaction in RequeueTransactions)
+                Queue.Enqueue(transaction);
         }
     }
     
