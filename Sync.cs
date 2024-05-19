@@ -354,9 +354,10 @@ public static class Sync
                 string id = $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}";
                 
                 // Add the table item
-                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("SimulationUsers", id)
+                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("SimulationUsers", SimulationId)
                 {
                     {"SimulationUser_Id", id},
+                    {"SimulationId", SimulationId},
                     {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
                     {"SimulationUser_Email", userSimDetail.SimulationUser?.Email},
                     {"CompromisedDateTime", userSimDetail.CompromisedDateTime},
