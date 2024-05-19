@@ -354,7 +354,7 @@ public static class Sync
                 string id = $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}";
                 
                 // Add the table item
-                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("SimulationUsers", SimulationId)
+                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, userSimDetail.SimulationUser?.UserId)
                 {
                     {"SimulationUser_Id", id},
                     {"SimulationId", SimulationId},
@@ -380,9 +380,9 @@ public static class Sync
                 {
                     foreach (var simulationUserEvents in userSimDetail.SimulationEvents)
                     {
-                        tableActionQueue_SimulationUserEvents.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("SimulationUserEvents", $"{id}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
+                        tableActionQueue_SimulationUserEvents.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
                         {
-                            {"SimulationUser_Id", $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}"},
+                            {"SimulationUser_Id", id},
                             {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
                             {"SimulationUserEvent_EventName", simulationUserEvents.EventName},
                             {"SimulationUserEvent_EventDateTime", simulationUserEvents.EventDateTime},
