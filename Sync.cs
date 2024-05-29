@@ -18,10 +18,6 @@ namespace ASTSync;
 public static class Sync
 {
 
-    private static string _appClientId = Environment.GetEnvironmentVariable("AppClientId", EnvironmentVariableTarget.Process);
-    private static string _appTenantId = Environment.GetEnvironmentVariable("AppTenantId", EnvironmentVariableTarget.Process);
-    private static string _appSecret = Environment.GetEnvironmentVariable("AppSecret", EnvironmentVariableTarget.Process);
-
     // If to pull entra users
     private static bool _pullEntraUsers =
         bool.Parse(Environment.GetEnvironmentVariable("SyncEntra", EnvironmentVariableTarget.Process) ?? "false");
@@ -67,10 +63,7 @@ public static class Sync
 
         _log = log;
         
-        // Validate required variables
-        if (string.IsNullOrEmpty(_appClientId) || string.IsNullOrEmpty(_appTenantId) || string.IsNullOrEmpty(_appSecret))
-            throw new Exception("AppClientID, AppTenantID, and AppSecret must be set");
-
+        // Get graph client
         var GraphClient = GetGraphServicesClient();
         
         _log.LogInformation($"C# Timer trigger function executed at: {DateTime.UtcNow}");
@@ -419,18 +412,14 @@ public static class Sync
     /// <returns></returns>
     private static GraphServiceClient GetGraphServicesClient()
     {
-        // Construct auth provider to Graph
+        // Use default azure credential
+        var tokenCredential = new DefaultAzureCredential();
+        
+        // Default graph scope
         var scopes = new[] { "https://graph.microsoft.com/.default" };
-        var tenantId = "common";
-        
-        var options = new TokenCredentialOptions
-        {
-            AuthorityHost = AzureAuthorityHosts.AzurePublicCloud
-        };
 
-        var clientSecretCredential = new ClientSecretCredential(_appTenantId, _appClientId, _appSecret, options);
-        
-        return new GraphServiceClient(clientSecretCredential, scopes);
+        // Return graph services client
+        return new GraphServiceClient(tokenCredential, scopes);
     }
     
     /// <summary>
