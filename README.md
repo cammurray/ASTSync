@@ -21,6 +21,8 @@ On the iterative sync windows, we will only pull simulations that are in a runni
 
 User details are pulled as well in to the Users table to enable better reporting, but this can be disabled by setting the "SyncEntra" environment variable to false.
 
+For simplicity of deployment, the Function App storage account is used for the Table storage.
+
 ## Installation
 
 Whilst the code here could be adjusted to suit any means, it is intended to run in an Azure Function App.
@@ -105,5 +107,11 @@ Once the deployment method has been set, you should be able to click the "Sync" 
 After clicking sync, monitor the deployment on the logs page, the "Status" should change when complete. The deployment will take several minutes.
 
 ### Connecting to the Azure Table
+
+For simplicity of deployment, the Azure Function app inbuilt storage account is used for deployment. This storage account will be located automatically in the same resource group as the function app.
+
+![image](https://github.com/cammurray/ASTSync/assets/26195772/f623a7c9-dcf3-475b-a61d-210a4223bcd8)
+
+
 
 
