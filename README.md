@@ -71,8 +71,8 @@ Install-Module AzureAD -Scope CurrentUser
 Connect-AzureAD
 
 # Find the Managed Service Identity and Graph Service Principal
-$MSI = (Get-AzureADServicePrincipal -Filter "ObjectId eq '00000003-0000-0000-c000-000000000000'")
-$GraphServicePrincipal = Get-AzureADServicePrincipal -Filter "appId eq '$GraphAppId'"
+$MSI = (Get-AzureADServicePrincipal -Filter "ObjectId eq '$PrincipalID'")
+$GraphServicePrincipal = Get-AzureADServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
 
 # Add AttackSimulation.Read.All permission
 $AppRole = $GraphServicePrincipal.AppRoles | Where-Object {$_.Value -eq "AttackSimulation.Read.All" -and $_.AllowedMemberTypes -contains "Application"}
