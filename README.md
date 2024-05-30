@@ -52,6 +52,31 @@ First, turn on the managed identity in your azure function app by going to Setti
 
 <img width="1151" alt="image" src="https://github.com/cammurray/ASTSync/assets/26195772/a1a1ae0a-6721-4244-a6b4-53d7910d4397">
 
+When this option saves, you should be given a Object (principal) ID, you must save this
+
+![image](https://github.com/cammurray/ASTSync/assets/26195772/fa130b73-db26-4cbf-b97c-8205ccf9cde7)
+
+For the next steps, you will need PowerShell. Due to AzureAD module compatability, this cannot be ran from a Mac or an ARM processor. Needs to be run on Windows/x86.
+
+The following script will find the Function App Security Principal, and grant it AttackSimulation.Read.All and User.Read.All scopes to Microsoft Graph.
+
+Copy and paste the following in to a PowerShell prompt:
+
+`
+$PrincipalID=Read-Host "Enter the Object ID of the Function App Managed Service Principal"
+Install-Module AzureAD -Scope CurrentUser
+Connect-AzureAD
+$MSI = (Get-AzureADServicePrincipal -Filter "ObjectId eq '00000003-0000-0000-c000-000000000000'")
+$GraphServicePrincipal = Get-AzureADServicePrincipal -Filter "appId eq '$GraphAppId'"
+
+$AppRole = $GraphServicePrincipal.AppRoles | Where-Object {$_.Value -eq "AttackSimulation.Read.All" -and $_.AllowedMemberTypes -contains "Application"}
+New-AzureAdServiceAppRoleAssignment -ObjectId $MSI.ObjectId -PrincipalId $MSI.ObjectId -ResourceId $GraphServicePrincipal.ObjectId -Id $AppRole.Id
+
+$AppRole = $GraphServicePrincipal.AppRoles | Where-Object {$_.Value -eq "User.Read.All" -and $_.AllowedMemberTypes -contains "Application"}
+New-AzureAdServiceAppRoleAssignment -ObjectId $MSI.ObjectId -PrincipalId $MSI.ObjectId -ResourceId $GraphServicePrincipal.ObjectId -Id $AppRole.Id
+`
+
+#### (Option 2) Not Recommended - Azure AD Application (COMING SOON).
 
 #### Deploy the code
 
