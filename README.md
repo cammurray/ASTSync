@@ -11,6 +11,16 @@ The following API methods are pulled, flattened, and stored in to Azure Table St
 * graph.microsoft.com/beta/security/attackSimulation/training -> Trainings
 * graph.microsoft.com/beta/users -> Users (Only performed for users that have had a simulation ran against them)
 
+## What happens when we sync?
+
+The function app by default runs every hour. If you want to change this, you will need to fork the code and use your fork for deployment. Be wary of hitting any Graph limitations.
+
+On the initial sync, we will pull down every simulation, simulation user, and event. This will take some time to complete. Be patient.
+
+On the iterative sync windows, we will only pull simulations that are in a running state, or completed within the past 7 days.
+
+User details are pulled as well in to the Users table to enable better reporting, but this can be disabled by setting the "SyncEntra" environment variable to false.
+
 ## Installation
 
 Whilst the code here could be adjusted to suit any means, it is intended to run in an Azure Function App.
@@ -34,12 +44,13 @@ Wait for deployment to complete, and then proceed to setting the deployment meth
 In the "Deployment Center" for the Azure Function App (Accessible under the Deployment Menu), populate the deployment options:
 * **Source** Manual Deployment - External Git
 * **Repository** Is this one here: https://github.com/cammurray/ASTSync
-* **Branch** main
+* **Branch** master
 * **Repository Type** Public
 
 Click Save when populated
 
-<img width="1083" alt="image" src="https://github.com/cammurray/ASTSync/assets/26195772/33958734-489d-4f53-a20e-7f76f97adf05">
+<img width="1050" alt="image" src="https://github.com/cammurray/ASTSync/assets/26195772/a23735d2-9070-45bc-9134-9724ddbaf089">
+
 
 #### Set up the Authentication to Graph API
 
@@ -90,3 +101,9 @@ New-AzureAdServiceAppRoleAssignment -ObjectId $MSI.ObjectId -PrincipalId $MSI.Ob
 Once the deployment method has been set, you should be able to click the "Sync" button. This downloads the latest version and compiles it. Confirm the redeployment.
 
 ![image](https://github.com/cammurray/ASTSync/assets/26195772/70516189-0e0c-4b5c-88a1-97ce1665f72f)
+
+After clicking sync, monitor the deployment on the logs page, the "Status" should change when complete. The deployment will take several minutes.
+
+### Connecting to the Azure Table
+
+
