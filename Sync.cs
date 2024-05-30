@@ -2,9 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
+using ASTSync.BatchTableHelper;
 using Azure.Data.Tables;
 using Azure.Identity;
 using Microsoft.Azure.WebJobs;
@@ -28,24 +27,9 @@ public static class Sync
     private static int _maxTableBatchSize = 100;
 
     /// <summary>
-    /// Queue for Simulation Table entries, async batch/bulk processed
+    /// How frequent to sync users (default 7 days)
     /// </summary>
-    private static ConcurrentQueue<TableTransactionAction> tableActionQueue_Simulations = new();
-    
-    /// <summary>
-    /// Queue for Simulation User Table entries, async batch/bulk processed
-    /// </summary>
-    private static ConcurrentQueue<TableTransactionAction> tableActionQueue_SimulationUsers = new();
-    
-    /// <summary>
-    /// Queue for Simulation User Events Table entries, async batch/bulk processed
-    /// </summary>
-    private static ConcurrentQueue<TableTransactionAction> tableActionQueue_SimulationUserEvents  = new();
-    
-    /// <summary>
-    /// Queue for User entries, async batch/bulk processed
-    /// </summary>
-    private static ConcurrentQueue<TableTransactionAction> tableActionQueue_Users  = new();
+    private static TimeSpan _ageUserSync = TimeSpan.FromDays(7);
 
     /// <summary>
     /// Maintains a list of users we have already synced
@@ -57,187 +41,120 @@ public static class Sync
     /// </summary>
     private static ILogger _log { get; set; }
     
+    /// <summary>
+    /// Batch table processor for Entra Users
+    /// </summary>
+    private static BatchTable _batchUsers { get; set; }
+    
+    /// <summary>
+    /// Batch table processor for Simulations
+    /// </summary>
+    private static BatchTable _batchSimulations { get; set; }
+    
+    /// <summary>
+    /// Batch table processor for Simulation Users
+    /// </summary>
+    private static BatchTable _batchSimulationUsers { get; set; }
+    
+    /// <summary>
+    /// Batch table processor for Simulation User Events
+    /// </summary>
+    private static BatchTable _batchSimulationUserEvents { get; set; }
+    
+    /// <summary>
+    /// Batch table processor for Trainings
+    /// </summary>
+    private static BatchTable _batchTrainings { get; set; }
+    
+    /// <summary>
+    /// Batch table processor for Payloads
+    /// </summary>
+    private static BatchTable _batchPayloads { get; set; }
+    
     [FunctionName("Sync")]
     public static async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
     {
-
+        
+        Stopwatch sw = Stopwatch.StartNew();
+        
         _log = log;
         
         // Get graph client
         var GraphClient = GetGraphServicesClient();
         
-        _log.LogInformation($"C# Timer trigger function executed at: {DateTime.UtcNow}");
-
-        await CreateRequiredTables();
+        _log.LogInformation($"AST Sync started at: {DateTime.UtcNow}");
         
-        // Spin up the batch queue processor
-        CancellationTokenSource batchQueueProcessorTokenSource = new CancellationTokenSource();
-        Task taskBatchQueueProcessor = Task.Run(() => BatchQueueProcessor(batchQueueProcessorTokenSource.Token));
+        // Spin up the batch queue processors
+        _batchUsers = new BatchTable(GetStorageConnection(), "Users", _maxTableBatchSize, log);
+        _batchSimulations = new BatchTable(GetStorageConnection(), "Simulations", _maxTableBatchSize, log);
+        _batchSimulationUsers = new BatchTable(GetStorageConnection(), "SimulationUsers", _maxTableBatchSize, log);
+        _batchSimulationUserEvents = new BatchTable(GetStorageConnection(), "SimulationUserEvents", _maxTableBatchSize, log);
+        _batchTrainings = new BatchTable(GetStorageConnection(), "Trainings", _maxTableBatchSize, log);
+        _batchPayloads = new BatchTable(GetStorageConnection(), "Payloads", _maxTableBatchSize, log);
         
         // Sync Tenant Simulations to perform sync whilst sync'ing simulations to table
         // This can probably be moved to an async foreach below.
-        
-        var simulationIds = await GetTenantSimulations(GraphClient);
+        // However, need to figure out how to do the async foreach return in a lambda (graph services client paging func.)
 
+        HashSet<string> simulationIds;
+        
+        try
+        {
+             simulationIds = await GetTenantSimulations(GraphClient);
+        }
+        catch (Exception e)
+        {
+            _log.LogError($"Failed to get simulations: {e}");
+            throw;
+        }
+        
+        
         // Sync Tenant Simulation Users
         foreach (string id in simulationIds)
         {
-            // Throw if taskBatchQueueProcessor is faulted
-            if (taskBatchQueueProcessor.IsFaulted)
-                throw new Exception($"taskBatchQueueProcessor has faulted: {taskBatchQueueProcessor.Exception}");
-            
-            // Run get simulation users
-            await GetTenantSimulationUsers(GraphClient, id);
-        }
-
-        // Wait for batch queue processor to complete
-        while (!taskBatchQueueProcessor.IsCompleted)
-        {
-            // Signal to batch queue processor work has completed
-            batchQueueProcessorTokenSource.Cancel();
-
-            // Sleep for a second
-            await Task.Delay(1000);
-        }
-    }
-
-    /// <summary>
-    /// Processes the queues 
-    /// </summary>
-    private static async Task BatchQueueProcessor(CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            // Tasks for submission tasks
-            List<Task> SubmissionTasks = new List<Task>();
-        
-            // Process Simulations Queue
-            if (tableActionQueue_Simulations.Any())
-                SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_Simulations,
-                    new TableClient(GetStorageConnection(), "Simulations"), cancellationToken))); 
-        
-            // Process SimulationUsers Queue
-            if (tableActionQueue_SimulationUsers.Any())
-                SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_SimulationUsers,
-                    new TableClient(GetStorageConnection(), "SimulationUsers"), cancellationToken))); 
-            
-            // Process SimulationUserEvents Queue
-            if (tableActionQueue_SimulationUserEvents.Any())
-                SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_SimulationUserEvents,
-                    new TableClient(GetStorageConnection(), "SimulationUserEvents"), cancellationToken))); 
-            
-            // Process Users Queue
-            if (tableActionQueue_Users.Any())
-                SubmissionTasks.Add(Task.Run(() => BatchQueueProcess(tableActionQueue_Users,
-                    new TableClient(GetStorageConnection(), "Users"), cancellationToken))); 
-
-            // Wait for all submission tasks to complete
-            await Task.WhenAll(SubmissionTasks);
-
-            // Sleep for ten seconds
-            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
-        }
-        
-        // Flush all queues if not empty
-        while (!tableActionQueue_SimulationUsers.IsEmpty && !tableActionQueue_SimulationUserEvents.IsEmpty &&
-               !tableActionQueue_SimulationUserEvents.IsEmpty && !tableActionQueue_Users.IsEmpty)
-        {
-            await BatchQueueProcess(tableActionQueue_Simulations,
-                new TableClient(GetStorageConnection(), "Simulations"), cancellationToken);
-            await BatchQueueProcess(tableActionQueue_SimulationUsers,
-                new TableClient(GetStorageConnection(), "SimulationUsers"), cancellationToken);
-            await BatchQueueProcess(tableActionQueue_SimulationUserEvents,
-                new TableClient(GetStorageConnection(), "SimulationUserEvents"), cancellationToken);
-            await BatchQueueProcess(tableActionQueue_Users,
-                new TableClient(GetStorageConnection(), "Users"), cancellationToken);
-        }
-
-    }
-
-    /// <summary>
-    /// Processes a queue
-    /// </summary>
-    private static async Task BatchQueueProcess(ConcurrentQueue<TableTransactionAction> Queue, TableClient tableClient, CancellationToken ct)
-    {
-        List<TableTransactionAction> BatchTransactions = new List<TableTransactionAction>();
-        
-        // Used to re-queue transactions that cannot be put in this batch
-        // Such as transactions with a row key that is already present in the batch (cannot perform within the same batch)
-        
-        List<TableTransactionAction> RequeueTransactions = new List<TableTransactionAction>();
-
-        // Take items out of the queue until it's empty or the max batch size hit
-        while (!Queue.IsEmpty && BatchTransactions.Count < _maxTableBatchSize)
-        {
-            TableTransactionAction dequeued;
-
-            if (Queue.TryDequeue(out dequeued))
-            {
-                // Validate row key is not already in batch transactions
-                // Batches cannot contain two transactions for the same partition key and row.
-                
-                if (BatchTransactions.Any(x =>
-                        x.Entity.PartitionKey == dequeued.Entity.PartitionKey &&
-                        x.Entity.RowKey == dequeued.Entity.RowKey))
-                {
-                    // Requeue the transaction for next batch as it is already existing in this batch
-                    RequeueTransactions.Add(dequeued);
-                }
-                else
-                {
-                    BatchTransactions.Add(dequeued);
-                }
-                
-            }
-                
-        }
-
-        if (BatchTransactions.Any())
-        {
-            // Submit the transactions
-            _log.LogInformation($"Uploading batch to {tableClient.Name} of size {BatchTransactions.Count}");
-            
             try
             {
-                await tableClient.SubmitTransactionAsync(BatchTransactions);
+                await GetTenantSimulationUsers(GraphClient, id);
             }
-            catch (TableTransactionFailedException e)
+            catch (Exception e)
             {
-                List<TableTransactionAction> failedBatch = BatchTransactions.ToList();
-                
-                _log.LogError($"Failed to insert batch transaction in {tableClient.Name} with partition key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.PartitionKey} row key {failedBatch[e.FailedTransactionActionIndex.Value].Entity.RowKey} {e.Message}");
-                
-                // Remove the failing item from the batch and requeue rest
-                failedBatch.RemoveAt(e.FailedTransactionActionIndex.Value);
-                foreach (TableTransactionAction action in failedBatch)
-                {
-                    Queue.Enqueue(action);
-                }
+                _log.LogError($"Failed to get simulation users for simulation {id}: {e}");
             }
+            
+        }
+            
+        
+        // Remaining syncs
+        try
+        {
+            await GetTrainings(GraphClient);
+        }
+        catch (Exception e)
+        {
+            _log.LogError($"Failed to get trainings: {e}");
         }
         
-        // Requeue transactions
-        if (RequeueTransactions.Any())
+        try
         {
-            foreach(var transaction in RequeueTransactions)
-                Queue.Enqueue(transaction);
+            await GetPayloads(GraphClient);
         }
+        catch (Exception e)
+        {
+            _log.LogError($"Failed to get payloads: {e}");
+        }
+
+        // Dispose of all batch processors
+        await _batchUsers.DisposeAsync();
+        await _batchSimulations.DisposeAsync();
+        await _batchSimulationUsers.DisposeAsync();
+        await _batchSimulationUserEvents.DisposeAsync();
+        await _batchTrainings.DisposeAsync();
+        await _batchPayloads.DisposeAsync();
+        
+        _log.LogInformation($"AST sync completed synchronising {simulationIds.Count} simulations in {sw.Elapsed}");
+        
     }
     
-    /// <summary>
-    /// Create required tables
-    /// </summary>
-    private static async Task CreateRequiredTables()
-    {
-        // Establish service client
-        var serviceClient = new TableServiceClient(GetStorageConnection());
-        
-        // Create required tables
-        await serviceClient.CreateTableIfNotExistsAsync("Simulations");
-        await serviceClient.CreateTableIfNotExistsAsync("SimulationUsers");
-        await serviceClient.CreateTableIfNotExistsAsync("SimulationUserEvents");
-        await serviceClient.CreateTableIfNotExistsAsync("Users");
-    }
     
     /// <summary>
     /// Get Simulations for Tenant
@@ -289,7 +206,7 @@ public static class Sync
                 }
                 
                 // Add the table item
-                tableActionQueue_Simulations.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Simulations", sim.Id)
+                _batchSimulations.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Simulations", sim.Id)
                 {
                     {"AttackTechnique", sim.AttackTechnique.ToString()},
                     {"AttackType", sim.AttackType.ToString()},
@@ -320,9 +237,133 @@ public static class Sync
 
         await pageIterator.IterateAsync();
         
+        // Flush batch simulations
+        await _batchSimulations.FlushBatchAsync(TimeSpan.FromMinutes(5));
+        
         return SimulationIds;
     }
 
+    /// <summary>
+    /// Get Trainings
+    /// </summary>
+    /// <param name="GraphClient"></param>
+    private static async Task<bool> GetTrainings(GraphServiceClient GraphClient)
+    {
+        
+        Stopwatch sw = Stopwatch.StartNew();
+        _log.LogInformation("Synchronising trainings");
+        
+        // Get simulation results
+        var results = await GraphClient
+            .Security
+            .AttackSimulation
+            .Trainings
+            .GetAsync((requestConfiguration) =>
+            {
+                requestConfiguration.QueryParameters.Top = 1000;
+            });
+
+        var pageIterator = Microsoft.Graph.PageIterator<Training,TrainingCollectionResponse>
+            .CreatePageIterator(GraphClient, results, async (training) =>
+            {
+                
+                // Add the table item
+                _batchTrainings.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Trainings", training.Id)
+                {
+                    {"TrainingId", training.Id},
+                    {"DisplayName", training.DisplayName},
+                    {"Description", training.Description},
+                    {"DurationInMinutes", training.DurationInMinutes},
+                    {"Source", training.Source.ToString()},
+                    {"Type", training.Type?.ToString()},
+                    {"availabilityStatus", training.AvailabilityStatus?.ToString()},
+                    {"HasEvaluation", training.HasEvaluation},
+                    {"CreatedBy_Id", training.CreatedBy?.Id},
+                    {"CreatedBy_DisplayName", training.CreatedBy?.DisplayName},
+                    {"CreatedBy_Email", training.CreatedBy?.Email},
+                    {"LastModifiedBy_Id", training.LastModifiedBy?.Id},
+                    {"LastModifiedBy_DisplayName", training.LastModifiedBy?.DisplayName},
+                    {"LastModifiedBy_Email", training.LastModifiedBy?.Email},
+                    {"LastModifiedDateTime", training.LastModifiedDateTime},
+                }));
+                
+                return true; 
+            });
+
+        await pageIterator.IterateAsync();
+        
+        // Flush remaining trainings
+        await _batchTrainings.FlushBatchAsync(TimeSpan.FromMinutes(5));
+        
+        _log.LogInformation($"Synchronising trainings complete in {sw.Elapsed}");
+
+        return true;
+    }
+    
+    /// <summary>
+    /// Get Payloads
+    /// </summary>
+    /// <param name="GraphClient"></param>
+    private static async Task<bool> GetPayloads(GraphServiceClient GraphClient)
+    {
+        
+        Stopwatch sw = Stopwatch.StartNew();
+        _log.LogInformation("Synchronising payloads");
+        
+        // Get simulation results
+        var results = await GraphClient
+            .Security
+            .AttackSimulation
+            .Payloads
+            .GetAsync((requestConfiguration) =>
+            {
+                requestConfiguration.QueryParameters.Top = 1000;
+            });
+
+        var pageIterator = Microsoft.Graph.PageIterator<Payload,PayloadCollectionResponse>
+            .CreatePageIterator(GraphClient, results, async (payload) =>
+            {
+                
+                // Add the table item
+                _batchPayloads.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Payloads", payload.Id)
+                {
+                    {"PayloadId", payload.Id},
+                    {"DisplayName", payload.DisplayName},
+                    {"Description", payload.Description},
+                    {"SimulationAttackType", payload.SimulationAttackType?.ToString()},
+                    {"Platform", payload.Platform?.ToString()},
+                    {"Status", payload.Status?.ToString()},
+                    {"Source", payload.Source?.ToString()},
+                    {"PredictedCompromiseRate", payload.PredictedCompromiseRate},
+                    {"Complexity", payload.Complexity?.ToString()},
+                    {"Technique", payload.Technique?.ToString()},
+                    {"Theme", payload.Theme?.ToString()},
+                    {"Brand", payload.Brand?.ToString()},
+                    {"Industry", payload.Industry?.ToString()},
+                    {"IsCurrentEvent", payload.IsCurrentEvent},
+                    {"IsControversial", payload.IsControversial},
+                    {"CreatedBy_Id", payload.CreatedBy?.Id},
+                    {"CreatedBy_DisplayName", payload.CreatedBy?.DisplayName},
+                    {"CreatedBy_Email", payload.CreatedBy?.Email},
+                    {"LastModifiedBy_Id", payload.LastModifiedBy?.Id},
+                    {"LastModifiedBy_DisplayName", payload.LastModifiedBy?.DisplayName},
+                    {"LastModifiedBy_Email", payload.LastModifiedBy?.Email},
+                    {"LastModifiedDateTime", payload.LastModifiedDateTime},
+                }));
+                
+                return true; 
+            });
+
+        await pageIterator.IterateAsync();
+
+        // Flush remaining payloads
+        await _batchPayloads.FlushBatchAsync(TimeSpan.FromMinutes(5));
+        
+        _log.LogInformation($"Synchronising payloads complete in {sw.Elapsed}");
+
+        return true;
+    }
+    
     /// <summary>
     /// Get Simulations Users
     /// </summary>
@@ -347,7 +388,7 @@ public static class Sync
                 string id = $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}";
                 
                 // Add the table item
-                tableActionQueue_SimulationUsers.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, userSimDetail.SimulationUser?.UserId)
+                _batchSimulationUsers.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, userSimDetail.SimulationUser?.UserId)
                 {
                     {"SimulationUser_Id", id},
                     {"SimulationId", SimulationId},
@@ -373,7 +414,7 @@ public static class Sync
                 {
                     foreach (var simulationUserEvents in userSimDetail.SimulationEvents)
                     {
-                        tableActionQueue_SimulationUserEvents.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
+                        _batchSimulationUserEvents.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
                         {
                             {"SimulationUser_Id", id},
                             {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
@@ -394,18 +435,19 @@ public static class Sync
         await pageIterator.IterateAsync();
         
         // update in the Simulations table that this has been syncd
-        tableActionQueue_Simulations.Enqueue(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Simulations", SimulationId)
+        _batchSimulations.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Simulations", SimulationId)
         {
             {"LastUserSync", DateTime.UtcNow},
         }));
         
-        _log.LogInformation($"Full user synchronisation of {SimulationId} completed in {sw.Elapsed}");
+        // Flush batch simulations for users and events
+        await _batchSimulationUsers.FlushBatchAsync(TimeSpan.FromMinutes(5));
+        await _batchSimulationUserEvents.FlushBatchAsync(TimeSpan.FromMinutes(5));
         
-        // Perform a task delay here to allow other threads to complete
-        await Task.Delay(1000);
+        _log.LogInformation($"Full user synchronisation of {SimulationId} completed in {sw.Elapsed}");
 
     }
-
+    
     /// <summary>
     /// Get the Graph Client for Tenant
     /// </summary>
@@ -426,7 +468,7 @@ public static class Sync
     /// Get Storage Connection from App settings
     /// </summary>
     /// <returns></returns>
-    public static string GetStorageConnection() => Environment.GetEnvironmentVariable("AzureWebJobsStorage", EnvironmentVariableTarget.Process);
+    private static string GetStorageConnection() => Environment.GetEnvironmentVariable("AzureWebJobsStorage", EnvironmentVariableTarget.Process);
 
     /// <summary>
     /// Synchronise user
@@ -444,7 +486,7 @@ public static class Sync
 
             if (User is not null)
             {
-                tableActionQueue_Users.Enqueue(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Users", id)
+                _batchUsers.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("Users", id)
                 {
                     {"DisplayName", User.DisplayName},
                     {"GivenName", User.GivenName},
@@ -464,10 +506,10 @@ public static class Sync
         }
         catch (ODataError e)
         {
-            if (e.Error.Code == "Request_ResourceNotFound")
+            if (e.Error is not null && e.Error.Code == "Request_ResourceNotFound")
             {
-                // User no longer exists
-                tableActionQueue_Users.Enqueue(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Users", id)
+                // User no longer exists, update table entity
+                _batchUsers.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpsertMerge, new TableEntity("Users", id)
                 {
                     {"Exists", "false"},
                     {"LastUserSync", DateTime.UtcNow},
@@ -483,6 +525,8 @@ public static class Sync
     
     /// <summary>
     /// Determine if should sync user
+    ///
+    /// This prevents continously syncing the user
     /// </summary>
     /// <param name="id"></param>
     /// <returns></returns>
@@ -506,7 +550,7 @@ public static class Sync
             LastUserSync = DateTime.SpecifyKind(DateTime.Parse(UserTableItem.Value["LastUserSync"].ToString()), DateTimeKind.Utc);
 
         // If no sync or days is older than a week
-        if (LastUserSync < DateTime.UtcNow.AddDays(-7))
+        if (LastUserSync < DateTime.UtcNow.Subtract(_ageUserSync))
             return true;
            
         // Add to userSyncList so we don't need to check again
