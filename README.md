@@ -9,6 +9,7 @@ The following API methods are pulled, flattened, and stored in to Azure Table St
 * graph.microsoft.com/beta/security/attackSimulation/simulations/{id}/reports/simulationUsers -> SimulationsUsers (stores a row for every user in the simulation) and SimulationUserEvents Table (stores all events, such as click/report, etc.)
 * graph.microsoft.com/beta/security/attackSimulation/payloads -> Payloads
 * graph.microsoft.com/beta/security/attackSimulation/training -> Trainings
+* graph.microsoft.com/beta/users -> Users (Only performed for users that have had a simulation ran against them)
 
 ## Installation
 
