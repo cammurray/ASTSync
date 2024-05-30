@@ -19,7 +19,7 @@ public static class Sync
 
     // If to pull entra users
     private static bool _pullEntraUsers =
-        bool.Parse(Environment.GetEnvironmentVariable("SyncEntra", EnvironmentVariableTarget.Process) ?? "false");
+        bool.Parse(Environment.GetEnvironmentVariable("SyncEntra", EnvironmentVariableTarget.Process) ?? "true");
     
     /// <summary>
     /// How many table rows to send up in a batch
