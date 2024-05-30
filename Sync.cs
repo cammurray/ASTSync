@@ -72,7 +72,7 @@ public static class Sync
     private static BatchTable _batchPayloads { get; set; }
     
     [FunctionName("Sync")]
-    public static async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
+    public static async Task RunAsync([TimerTrigger("0 0 * * * *")] TimerInfo myTimer, ILogger log)
     {
         
         Stopwatch sw = Stopwatch.StartNew();
