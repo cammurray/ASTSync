@@ -63,19 +63,25 @@ The following script will find the Function App Security Principal, and grant it
 
 Copy and paste the following in to a PowerShell prompt:
 
-`
+```
 $PrincipalID=Read-Host "Enter the Object ID of the Function App Managed Service Principal"
+
+# Install AAD Module and Connect
 Install-Module AzureAD -Scope CurrentUser
 Connect-AzureAD
+
+# Find the Managed Service Identity and Graph Service Principal
 $MSI = (Get-AzureADServicePrincipal -Filter "ObjectId eq '00000003-0000-0000-c000-000000000000'")
 $GraphServicePrincipal = Get-AzureADServicePrincipal -Filter "appId eq '$GraphAppId'"
 
+# Add AttackSimulation.Read.All permission
 $AppRole = $GraphServicePrincipal.AppRoles | Where-Object {$_.Value -eq "AttackSimulation.Read.All" -and $_.AllowedMemberTypes -contains "Application"}
 New-AzureAdServiceAppRoleAssignment -ObjectId $MSI.ObjectId -PrincipalId $MSI.ObjectId -ResourceId $GraphServicePrincipal.ObjectId -Id $AppRole.Id
 
+# Add User.Read.All permission
 $AppRole = $GraphServicePrincipal.AppRoles | Where-Object {$_.Value -eq "User.Read.All" -and $_.AllowedMemberTypes -contains "Application"}
 New-AzureAdServiceAppRoleAssignment -ObjectId $MSI.ObjectId -PrincipalId $MSI.ObjectId -ResourceId $GraphServicePrincipal.ObjectId -Id $AppRole.Id
-`
+```
 
 #### (Option 2) Not Recommended - Azure AD Application (COMING SOON).
 
