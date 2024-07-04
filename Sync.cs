@@ -114,7 +114,7 @@ public static class Sync
         {
             try
             {
-                await GetTenantSimulationUsers(GraphClient, id);
+                //await GetTenantSimulationUsers(GraphClient, id);
             }
             catch (Exception e)
             {
@@ -134,13 +134,24 @@ public static class Sync
             _log.LogError($"Failed to get trainings: {e}");
         }
         
+        // Get tenant payloads
         try
         {
-            await GetPayloads(GraphClient);
+            await GetPayloads(GraphClient, SourceType.Tenant);
         }
         catch (Exception e)
         {
-            _log.LogError($"Failed to get payloads: {e}");
+            _log.LogError($"Failed to get tenant payloads: {e}");
+        }
+        
+        // Get global payloads
+        try
+        {
+            await GetPayloads(GraphClient, SourceType.Global);
+        }
+        catch (Exception e)
+        {
+            _log.LogError($"Failed to get global payloads: {e}");
         }
 
         // Dispose of all batch processors
@@ -304,11 +315,19 @@ public static class Sync
     /// Get Payloads
     /// </summary>
     /// <param name="GraphClient"></param>
-    private static async Task<bool> GetPayloads(GraphServiceClient GraphClient)
+    private static async Task<bool> GetPayloads(GraphServiceClient GraphClient, SourceType Source)
     {
         
         Stopwatch sw = Stopwatch.StartNew();
         _log.LogInformation("Synchronising payloads");
+
+        string? filter = null;
+
+        if (Source == SourceType.Global)
+            filter = "source eq 'global'";
+
+        if (Source == SourceType.Tenant) 
+            filter = "source eq 'tenant'";
         
         // Get simulation results
         var results = await GraphClient
@@ -318,6 +337,7 @@ public static class Sync
             .GetAsync((requestConfiguration) =>
             {
                 requestConfiguration.QueryParameters.Top = 1000;
+                requestConfiguration.QueryParameters.Filter = filter;
             });
 
         var pageIterator = Microsoft.Graph.PageIterator<Payload,PayloadCollectionResponse>
@@ -559,4 +579,20 @@ public static class Sync
         return false;
 
     }
+}
+
+/// <summary>
+/// Source Type, Global or Tenant - for filters
+/// </summary>
+public enum SourceType
+{
+    /// <summary>
+    /// Global (default payloads)
+    /// </summary>
+    Global,
+    
+    /// <summary>
+    /// Tenant specific
+    /// </summary>
+    Tenant
 }
