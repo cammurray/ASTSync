@@ -114,7 +114,7 @@ public static class Sync
         {
             try
             {
-                //await GetTenantSimulationUsers(GraphClient, id);
+                await GetTenantSimulationUsers(GraphClient, id);
             }
             catch (Exception e)
             {
