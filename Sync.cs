@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Beta;
 using Microsoft.Graph.Beta.Models;
 using Microsoft.Graph.Beta.Models.ODataErrors;
+using Microsoft.Graph.Beta.Reports.Security.GetAttackSimulationTrainingUserCoverage;
 
 namespace ASTSync;
 
@@ -71,6 +72,11 @@ public static class Sync
     /// </summary>
     private static BatchTable _batchPayloads { get; set; }
     
+    /// <summary>
+    /// Batch table processor for Training User Coverage
+    /// </summary>
+    private static BatchTable _batchTrainingUserCoverage { get; set; }
+    
     [FunctionName("Sync")]
     public static async Task RunAsync([TimerTrigger("0 0 * * * *")] TimerInfo myTimer, ILogger log)
     {
@@ -91,6 +97,7 @@ public static class Sync
         _batchSimulationUserEvents = new BatchTable(GetStorageConnection(), "SimulationUserEvents", _maxTableBatchSize, log);
         _batchTrainings = new BatchTable(GetStorageConnection(), "Trainings", _maxTableBatchSize, log);
         _batchPayloads = new BatchTable(GetStorageConnection(), "Payloads", _maxTableBatchSize, log);
+        _batchTrainingUserCoverage = new BatchTable(GetStorageConnection(), "TrainingUserCoverage", _maxTableBatchSize, log);
         
         // Sync Tenant Simulations to perform sync whilst sync'ing simulations to table
         // This can probably be moved to an async foreach below.
@@ -153,6 +160,16 @@ public static class Sync
         {
             _log.LogError($"Failed to get global payloads: {e}");
         }
+        
+        // Get training user coverage
+        try
+        {
+            await GetTrainingUserCoverage(GraphClient);
+        }
+        catch (Exception e)
+        {
+            _log.LogError($"Failed to get training user coverage: {e}");
+        }
 
         // Dispose of all batch processors
         await _batchUsers.DisposeAsync();
@@ -161,6 +178,7 @@ public static class Sync
         await _batchSimulationUserEvents.DisposeAsync();
         await _batchTrainings.DisposeAsync();
         await _batchPayloads.DisposeAsync();
+        await _batchTrainingUserCoverage.DisposeAsync();
         
         _log.LogInformation($"AST sync completed synchronising {simulationIds.Count} simulations in {sw.Elapsed}");
         
@@ -310,6 +328,61 @@ public static class Sync
 
         return true;
     }
+    
+    /// <summary>
+    /// Get Training User Coverage
+    /// </summary>
+    /// <param name="GraphClient"></param>
+    private static async Task<bool> GetTrainingUserCoverage(GraphServiceClient GraphClient)
+    {
+        
+        Stopwatch sw = Stopwatch.StartNew();
+        _log.LogInformation("Synchronising training user coverage");
+        
+        // Get simulation results
+        var results = await GraphClient
+            .Reports
+            .Security
+            .GetAttackSimulationTrainingUserCoverage.
+            GetAsGetAttackSimulationTrainingUserCoverageGetResponseAsync((requestConfiguration) =>
+            {
+                requestConfiguration.QueryParameters.Top = 1000;
+            });
+
+        var pageIterator = Microsoft.Graph.PageIterator<AttackSimulationTrainingUserCoverage,GetAttackSimulationTrainingUserCoverageGetResponse>
+            .CreatePageIterator(GraphClient, results, async (trainingUser) =>
+            {
+                
+                // Add the table item
+                if (trainingUser.UserTrainings is not null && trainingUser.AttackSimulationUser is not null)
+                {
+                    foreach (var trainingAssignment in trainingUser.UserTrainings)
+                    {
+                        // Partition key (large) training name, row key assignment date and user (user can be assigned training more than once)
+                        _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(trainingAssignment.DisplayName, $"{trainingUser.AttackSimulationUser.UserId}{trainingAssignment.AssignedDateTime}" )
+                        {
+                            {"UserId", trainingUser.AttackSimulationUser.UserId},
+                            {"DisplayName", trainingAssignment.DisplayName},
+                            {"AssignedDateTime", trainingAssignment.AssignedDateTime},
+                            {"CompletionDateTime", trainingAssignment.CompletionDateTime},
+                            {"TrainingStatus", trainingAssignment.TrainingStatus.ToString()}
+                        }));
+                    }
+                }
+                
+                return true; 
+            });
+
+        await pageIterator.IterateAsync();
+        
+        // Flush remaining trainings
+        await _batchTrainingUserCoverage.FlushBatchAsync(TimeSpan.FromMinutes(5));
+        
+        _log.LogInformation($"Synchronising trainings user coverage complete in {sw.Elapsed}");
+
+        return true;
+    }
+    
     
     /// <summary>
     /// Get Payloads
