@@ -367,10 +367,10 @@ public static class Sync
                             // API doesn't return training id but instead a display name
                             // Display name could have characters which azure table keys are sensitive to, strip with a hash.
                             // This is used for the rowkey
+                            
                             var hashDisplay = GetHashFromString(trainingAssignment.DisplayName);
                             
-                            // Partition key user name (likely to be the filtered prop), row key display name and assignment date (user can be assigned training more than once)
-                            _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(trainingUser.AttackSimulationUser.UserId, $"{hashDisplay}{trainingAssignment.AssignedDateTime?.ToString("yyyyMMddHHmmss")}" )
+                            _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity("TrainingUserCoverage", $"{trainingUser.AttackSimulationUser.UserId}{hashDisplay}{trainingAssignment.AssignedDateTime?.ToString("yyyyMMddHHmmss")}" )
                             {
                                 {"UserId", trainingUser.AttackSimulationUser.UserId},
                                 {"DisplayName", trainingAssignment.DisplayName},
