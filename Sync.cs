@@ -359,14 +359,17 @@ public static class Sync
                     foreach (var trainingAssignment in trainingUser.UserTrainings)
                     {
                         // Partition key (large) training name, row key assignment date and user (user can be assigned training more than once)
-                        _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(trainingAssignment.DisplayName, $"{trainingUser.AttackSimulationUser.UserId}{trainingAssignment.AssignedDateTime}" )
+                        if (trainingAssignment.AssignedDateTime is not null)
                         {
-                            {"UserId", trainingUser.AttackSimulationUser.UserId},
-                            {"DisplayName", trainingAssignment.DisplayName},
-                            {"AssignedDateTime", trainingAssignment.AssignedDateTime},
-                            {"CompletionDateTime", trainingAssignment.CompletionDateTime},
-                            {"TrainingStatus", trainingAssignment.TrainingStatus.ToString()}
-                        }));
+                            _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(trainingAssignment.DisplayName, $"{trainingUser.AttackSimulationUser.UserId}{trainingAssignment.AssignedDateTime?.ToString("yyyyMMddHHmmss")}" )
+                            {
+                                {"UserId", trainingUser.AttackSimulationUser.UserId},
+                                {"DisplayName", trainingAssignment.DisplayName},
+                                {"AssignedDateTime", trainingAssignment.AssignedDateTime},
+                                {"CompletionDateTime", trainingAssignment.CompletionDateTime},
+                                {"TrainingStatus", trainingAssignment.TrainingStatus.ToString()}
+                            }));
+                        }
                     }
                 }
                 
