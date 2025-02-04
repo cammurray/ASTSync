@@ -2,6 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using ASTSync.BatchTableHelper;
 using Azure.Data.Tables;
@@ -358,10 +360,17 @@ public static class Sync
                 {
                     foreach (var trainingAssignment in trainingUser.UserTrainings)
                     {
-                        // Partition key (large) training name, row key assignment date and user (user can be assigned training more than once)
+                        // AssignedDateTime is marked as nullable but API shouldn't be returning null
+                        // Check anyway.
                         if (trainingAssignment.AssignedDateTime is not null)
                         {
-                            _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(trainingAssignment.DisplayName, $"{trainingUser.AttackSimulationUser.UserId}{trainingAssignment.AssignedDateTime?.ToString("yyyyMMddHHmmss")}" )
+                            // API doesn't return training id but instead a display name
+                            // Display name could have characters which azure table keys are sensitive to, strip with a hash.
+                            // This is used for the rowkey
+                            var hashDisplay = GetHashFromString(trainingAssignment.DisplayName);
+                            
+                            // Partition key user name (likely to be the filtered prop), row key display name and assignment date (user can be assigned training more than once)
+                            _batchTrainingUserCoverage.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(trainingUser.AttackSimulationUser.UserId, $"{hashDisplay}{trainingAssignment.AssignedDateTime?.ToString("yyyyMMddHHmmss")}" )
                             {
                                 {"UserId", trainingUser.AttackSimulationUser.UserId},
                                 {"DisplayName", trainingAssignment.DisplayName},
@@ -654,6 +663,32 @@ public static class Sync
 
         return false;
 
+    }
+
+    /// <summary>
+    /// Generates an MD5 hash from string for the purpose of creating rowkeys that 
+    /// will not contain special characters that azure table is sensitive to.
+    /// MD5 is okay here as a) this is not crytographically sensitive data and b) there is a very low chance
+    /// of collision.
+    /// MD5 is a good pay off of storage space vs uniqueness
+    /// </summary>
+    /// <param name="Text"></param>
+    /// <returns></returns>
+    private static string GetHashFromString(string Text)
+    {
+        using (MD5 md5 = MD5.Create())
+        {
+            byte[] inputBytes = Encoding.ASCII.GetBytes(Text);
+            byte[] hashBytes = md5.ComputeHash(inputBytes);
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < hashBytes.Length; i++)
+            {
+                sb.Append(hashBytes[i].ToString("X2"));
+            }
+
+            return sb.ToString();
+        }
     }
 }
 
