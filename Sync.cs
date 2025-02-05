@@ -603,6 +603,7 @@ public static class Sync
                     {"City", User.City},
                     {"Country", User.Country},
                     {"JobTitle", User.JobTitle},
+                    {"accountEnabled", User.AccountEnabled},
                     {"LastUserSync", DateTime.UtcNow},
                     {"Exists", "true"},
                 }));
